@@ -3,10 +3,12 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>India Radar — RainViewer + Leaflet</title>
-<meta name="description" content="Zoomable India weather radar via RainViewer API. Leaflet base, radar overlay, click for dBZ/mm/h and 2-hour timeseries. CORS-safe tiles + screenshot."/>
+<title>India Radar + Lightning — RainViewer + Leaflet | DAMINI • ILDN</title>
+<meta name="description" content="India weather radar + lightning. RainViewer radar overlay, DAMINI (IITM) and ILDN lightning layers, Leaflet map, click for dBZ/mm/h and timeseries."/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="./leaflet_ildn_layer.js"></script>
+<script src="./leaflet_damini_layer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -19,10 +21,13 @@ a{color:var(--accent2)}
 .brand{font-weight:800;letter-spacing:.02em;display:flex;align-items:center;gap:8px}
 .brand i{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
 .badge{font-size:11px;color:var(--accent);border:1px solid var(--line);background:color-mix(in srgb,var(--card) 80%, transparent);padding:3px 8px;border-radius:999px}
+.badge.live{background:#fef08a;color:#854d0e;border-color:#facc15}
+.badge.live.on{background:#22c55e;color:#fff;border-color:#16a34a}
 .grow{flex:1}
 .ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .ctrl label{font-size:12px;color:var(--muted)}
 input[type=range]{accent-color:var(--accent)}
+select.pill{appearance:auto}
 .btn{appearance:none;border:1px solid var(--line);background:var(--card);color:var(--text);padding:7px 10px;border-radius:10px;cursor:pointer;font-weight:700;font-size:13px}
 .btn:hover{filter:brightness(1.15)}.btn:disabled{opacity:.5;cursor:not-allowed}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -58,7 +63,7 @@ canvas{max-width:100%}
 <body>
 <div id="top">
   <div class="wrap">
-    <div class="brand"><i></i> India Radar <span class="badge">RainViewer • Leaflet</span> <span class="badge">CORS-safe • Screenshot</span></div>
+    <div class="brand"><i></i> India Radar + Lightning <span class="badge">RainViewer • Leaflet</span> <span class="badge">DAMINI • ILDN</span> <span class="badge live" id="liveBadge">⚡ OFF</span></div>
     <div class="grow"></div>
     <div class="ctrl">
       <span class="pill" id="status">Loading radar…</span>
@@ -70,6 +75,16 @@ canvas{max-width:100%}
       <button class="btn" id="indiaBtn">🇮🇳 India</button>
     </div>
   </div>
+  <div class="wrap" style="padding-top:0;gap:8px">
+    <span class="pill" style="background:var(--card);border:1px solid var(--line);display:inline-flex;align-items:center;gap:8px">
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input id="toggleILDN" type="checkbox" checked/> ILDN (90 min)</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input id="toggleDamini" type="checkbox" checked/> Damini (15 min)</label>
+    </span>
+    <span class="pill" id="lightningStatus">Lightning: loading…</span>
+    <span class="pill mono" id="lightningCount" style="display:none">—</span>
+    <a class="btn ghost" id="openLightningDemo" href="./lightning-demo.html" target="_blank">Open demo ↗</a>
+    <span class="muted" style="font-size:11px">ILDN red &lt;30m / yellow 30–60 / green 60–90 • Damini peak&lt;0 red else blue. Uses <span class="mono">/api/ildn</span> + <span class="mono">/api/damini</span> proxy to fix CORS.</span>
+  </div>
   <div class="wrap" style="padding-top:0">
     <div class="timeline" style="flex:1">
       <button class="btn primary" id="play">▶ Play</button>
@@ -77,17 +92,18 @@ canvas{max-width:100%}
       <span class="pill mono" id="timeLabel">—</span>
       <button class="btn ghost" id="shotMapBtn">📸 Map PNG</button>
       <button class="btn ghost" id="shotPageBtn">🖼️ Page PNG</button>
-      <span class="muted" id="frameInfo">Past 2h • 10-min steps • auto-refresh 10 min</span>
+      <span class="muted" id="frameInfo">Radar: past 2h • 10-min • Lightning: ILDN 90m + Damini 15m</span>
     </div>
   </div>
   <div class="wrap" style="padding-top:0">
-    <span class="pill warn" id="corsNote" style="display:none">Tiles blocked — retrying with CORS-safe base…</span>
-    <span class="muted" id="archiveHint">Archive: PNGs saved by datetime (UTC) — see <span class="mono">/archive/YYYY/MM/DD/HHMM.png</span> • scheduler polls <span class="mono">weather-maps.json</span> every 10 min.</span>
+    <span class="pill warn" id="corsNote" style="display:none">Tiles blocked — retrying…</span>
+    <span class="pill warn" id="lightningWarn" style="display:none"></span>
+    <span class="muted" id="archiveHint">Archive: radar PNGs → <span class="mono">images/YYYY/YYYYMMDD_HHMM.png</span> every 10 min • If proxy not deployed, lightning falls back to direct (may be CORS-blocked).</span>
   </div>
 </div>
 
 <div id="layout">
-  <div id="map" aria-label="Radar map"></div>
+  <div id="map" aria-label="Radar and lightning map"></div>
   <div style="display:flex;flex-direction:column;gap:12px">
     <div class="card">
       <h3>Click on map → values</h3>
@@ -105,8 +121,14 @@ canvas{max-width:100%}
           <div class="kpi"><span>Intensity</span><b id="vCat">—</b><span id="vColor" style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid #ffffff30"></span> <span id="vHex" class="mono">—</span></div>
         </div>
         <div style="margin-top:10px" class="legend" id="legend"></div>
-        <div style="margin-top:10px" class="notice">Value decoded from tile pixel → Universal Blue table → dBZ → rain. Transparent = no echo. Reverse geocode via OpenStreetMap Nominatim.</div>
-        <div class="muted" style="margin-top:8px">Attribution: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">Weather data by RainViewer</a> • Place names © OpenStreetMap</div>
+        <div style="margin-top:8px" class="legend" id="legendLightning"><span style="display:inline-flex;align-items:center;gap:6px"><i style="background:#e74c3c"></i>ILDN &lt;30m</span><span style="display:inline-flex;align-items:center;gap:6px"><i style="background:#f1c40f"></i>30–60m</span><span style="display:inline-flex;align-items:center;gap:6px"><i style="background:#2ecc71"></i>60–90m</span><span style="display:inline-flex;align-items:center;gap:6px"><i style="background:#e74c3c"></i>Damini –ve</span><span style="display:inline-flex;align-items:center;gap:6px"><i style="background:#3498db"></i>Damini +ve</span></div>
+        <div style="margin-top:10px" class="notice">Radar value decoded from tile pixel → Universal Blue table → dBZ → rain. Transparent = no echo. Reverse geocode via OpenStreetMap Nominatim. Lightning via <a href="https://damini.tropmet.res.in/map/?view=55f5bbb4-5d2c-4602-a334-1572015d861e" target="_blank" rel="noopener">DAMINI (IITM)</a> • <a href="https://ildn.in/" target="_blank" rel="noopener">ILDN</a>. Proxies fix CORS; without them browser blocks direct <span class="mono">ildn.in / damini.tropmet.res.in</span>.</div>
+        <div class="muted" style="margin-top:8px">Attribution: Weather by <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a> • Place names © OpenStreetMap</div>
+        <div class="row" style="margin-top:8px">
+          <a class="btn ghost" href="https://damini.tropmet.res.in/map/?view=55f5bbb4-5d2c-4602-a334-1572015d861e" target="_blank" rel="noopener">Open DAMINI map ↗</a>
+          <a class="btn ghost" href="https://ildn.in/" target="_blank" rel="noopener">Open ILDN ↗</a>
+          <span class="muted" id="lightningMeta" style="font-size:11px"></span>
+        </div>
       </div>
     </div>
 
@@ -139,15 +161,14 @@ canvas{max-width:100%}
 <script>
 const INDIA = [20.5937,78.9629];
 let map = L.map('map',{zoomControl:true, worldCopyJump:true}).setView(INDIA,5);
+map.setMaxBounds([[5,65],[40,100]]);
 
-// theme
 const themeBtn=document.getElementById('themeBtn');
 function applyTheme(t){
   document.documentElement.setAttribute('data-theme', t);
   document.body.setAttribute('data-theme', t);
   themeBtn.textContent = t==='light' ? '🌙 Dark' : '☀️ Light';
   localStorage.setItem('radar-theme', t);
-  // swap basemap
   if(t==='light'){
     if(typeof cartoDark!=='undefined' && map.hasLayer(cartoDark)) map.removeLayer(cartoDark);
     if(typeof cartoLight!=='undefined') cartoLight.addTo(map);
@@ -193,6 +214,11 @@ function category(dBZ){
 const els = {
   status: document.getElementById('status'),
   corsNote: document.getElementById('corsNote'),
+  lightningWarn: document.getElementById('lightningWarn'),
+  lightningStatus: document.getElementById('lightningStatus'),
+  lightningCount: document.getElementById('lightningCount'),
+  lightningMeta: document.getElementById('lightningMeta'),
+  liveBadge: document.getElementById('liveBadge'),
   opacity: document.getElementById('opacity'),
   snow: document.getElementById('snow'),
   smooth: document.getElementById('smooth'),
@@ -255,7 +281,6 @@ async function loadWeatherMaps(){
     els.slider.max = String(past.length-1);
     els.slider.disabled=false;
     els.status.textContent = `Ready • ${past.length} frames • ${host}`;
-    // keep near latest if was at end
     const target = (prevIdx >= past.length-2) ? past.length-1 : Math.min(prevIdx, past.length-1);
     setRadarLayer(target);
     if(!colorMap.size) loadColorCSV();
@@ -379,7 +404,6 @@ async function onMapClick(e){
   els.tsStatus.textContent = "Sampling tiles…";
   if(window._pin) map.removeLayer(window._pin);
   window._pin = L.circleMarker([lat,lon],{radius:7, color:'#22d3ee', weight:2, fillColor:'#22d3ee', fillOpacity:.35}).addTo(map).bindPopup(`${lat}, ${lon}`).openPopup();
-  // fire geocode in parallel
   reverseGeocode(lat,lon).then(name=>{
     els.placeName.textContent = name ? name : `${lat}, ${lon}`;
     els.coord.textContent = name ? `${lat}, ${lon} • ${name}` : `${lat}, ${lon}`;
@@ -472,11 +496,82 @@ document.getElementById('shotMapBtn').addEventListener('click', ()=> doScreensho
 document.getElementById('shotPageBtn').addEventListener('click', ()=> doScreenshot('page'));
 document.getElementById('shotClose').addEventListener('click', ()=> document.getElementById('shotCard').style.display='none');
 
+// ---- Lightning: use your verified layers with proxy fix ----
+// API base: use same Vercel host if index.html is on radar_api, else the deployed proxy host.
+// For the preview (function-compute) the proxy lives on Vercel; point there.
+const API_BASE = (() => {
+  if (location.hostname.endsWith('vercel.app')) return location.origin;
+  // preview / local: point to deployed Vercel API that hosts /api/ildn + /api/damini
+  return 'https://radar-api-livid.vercel.app';
+})();
+const ildnGroup = L.layerGroup().addTo(map);
+const daminiGroup = L.layerGroup().addTo(map);
+let ildnCtrl=null, daminiCtrl=null;
+
+function initLightning(){
+  // Prefer proxy; if proxy 404 (not yet deployed) fall back to direct (CORS will fail, but we keep warning)
+  const ildnProxy = `${API_BASE}/api/ildn?span=90`;
+  const daminiProxy = `${API_BASE}/api/damini?interval=15`;
+  // probe proxy first with HEAD
+  Promise.all([
+    fetch(ildnProxy, {method:'HEAD'}).then(r=> r.ok).catch(()=> false),
+    fetch(daminiProxy, {method:'HEAD'}).then(r=> r.ok).catch(()=> false)
+  ]).then(([ildnOk, daminiOk])=>{
+    const ildnUrl = ildnOk ? ildnProxy : undefined;
+    const daminiUrl = daminiOk ? daminiProxy : undefined;
+    if(!ildnOk || !daminiOk){
+      const warn = document.getElementById('lightningWarn');
+      warn.style.display='inline-block';
+      warn.textContent = `Lightning proxy not yet deployed on ${API_BASE} — deploying /api/ildn + /api/damini will fix CORS. Direct calls are CORS-blocked.`;
+    }
+    try{
+      ildnCtrl = addILDNLayer(map, { layerGroup: ildnGroup, span: 90, refreshMs: 60000, ...(ildnUrl?{proxyUrl: ildnUrl}:{}) });
+    }catch(e){ console.warn('ILDN init', e); }
+    try{
+      daminiCtrl = addDaminiLayer(map, { layerGroup: daminiGroup, interval: 15, refreshMs: 300000, ...(daminiUrl?{proxyUrl: daminiUrl}:{}) });
+    }catch(e){ console.warn('Damini init', e); }
+    updateLightningCount();
+    setInterval(updateLightningCount, 15000);
+    // toggle wiring
+    document.getElementById('toggleILDN').addEventListener('change', e=>{
+      if(e.target.checked) map.addLayer(ildnGroup); else map.removeLayer(ildnGroup);
+      updateLightningCount();
+    });
+    document.getElementById('toggleDamini').addEventListener('change', e=>{
+      if(e.target.checked) map.addLayer(daminiGroup); else map.removeLayer(daminiGroup);
+      updateLightningCount();
+    });
+    L.control.layers(null, {
+      "ILDN (90 min)": ildnGroup,
+      "Damini (15 min)": daminiGroup
+    }, {collapsed:false}).addTo(map);
+  });
+}
+function updateLightningCount(){
+  const ildnN = ildnGroup.getLayers().length;
+  const daminiN = daminiGroup.getLayers().length;
+  const total = ildnN + daminiN;
+  const el = document.getElementById('lightningCount');
+  const badge = document.getElementById('liveBadge');
+  const status = document.getElementById('lightningStatus');
+  el.style.display='inline-block';
+  el.textContent = `⚡ ${total} strikes (ILDN ${ildnN} • Damini ${daminiN})`;
+  if(total>0){
+    badge.textContent='⚡ LIVE';
+    badge.classList.add('on');
+    status.textContent = `Lightning: ${total} points on map`;
+  } else {
+    badge.textContent='⚡ 0';
+    badge.classList.remove('on');
+    status.textContent = 'Lightning: no strikes in last window';
+  }
+}
+
 loadWeatherMaps();
-// auto-refresh every 10 min (RainViewer step is 10 min, window 2 h)
 setInterval(loadWeatherMaps, 10*60*1000);
 renderChart([{time:Math.floor(Date.now()/1000), dbz:null, rain:0},{time:Math.floor(Date.now()/1000)+600, dbz:null, rain:0}]);
 if(chartInst){ chartInst.data.datasets[0].data=[null,null]; chartInst.update(); }
+initLightning();
 </script>
 </body>
 </html>
