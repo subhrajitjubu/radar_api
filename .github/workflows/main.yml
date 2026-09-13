@@ -1,0 +1,26 @@
+name: radar-archive
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call archive endpoint (or warm RainViewer)
+        env:
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -e
+          if [ -n "$VERCEL_URL" ]; then
+            echo "Pinging $VERCEL_URL/api/cron/archive"
+            curl -fsSL -H "Authorization: Bearer $CRON_SECRET" "$VERCEL_URL/api/cron/archive" | head -c 1000; echo
+            curl -fsSL "$VERCEL_URL/api/radar/frames" | python3 -c "import sys,json; j=json.load(sys.stdin); print(f\"frames={len(j.get('past',[]))} host={j.get('host')}\")"
+          else
+            echo "VERCEL_URL not set — warming RainViewer directly"
+            curl -fsSL https://api.rainviewer.com/public/weather-maps.json | python3 -c "import sys,json; j=json.load(sys.stdin); print(f\"host={j['host']} frames={len(j['radar']['past'])} latest={j['radar']['past'][-1]['time']}\")"
+          fi
+      - name: Direct RainViewer check
+        run: |
+          curl -fsSL https://api.rainviewer.com/public/weather-maps.json | python3 -c "import sys,json; j=json.load(sys.stdin); print(f\"generated={j.get('generated')} past={len(j['radar']['past'])}\")"
