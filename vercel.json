@@ -1,0 +1,13 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/archive",
+      "schedule": "*/10 * * * *"
+    }
+  ],
+  "functions": {
+    "api/**/*.js": {
+      "maxDuration": 30
+    }
+  }
+}

@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>India Radar — RainViewer + Leaflet</title>
+<meta name="description" content="Zoomable India weather radar via RainViewer API. Leaflet base, radar overlay, click for dBZ/mm/h and 2-hour timeseries. CORS-safe tiles + screenshot."/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<style>
+:root{--bg:#0b1220;--card:#111c33;--line:#1e2e55;--text:#e6eefc;--muted:#8ea0c3;--accent:#3b82f6;--accent2:#22d3ee;--mapbg:#060b18}
+[data-theme="light"]{--bg:#f1f5f9;--card:#ffffff;--line:#cbd5e1;--text:#0f172a;--muted:#64748b;--accent:#2563eb;--accent2:#0891b2;--mapbg:#e2e8f0}
+*{box-sizing:border-box}html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,Segoe UI,Roboto,Helvetica,Arial;transition:background .25s,color .25s}
+a{color:var(--accent2)}
+#top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 92%, transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.wrap{max-width:1280px;margin:0 auto;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.brand{font-weight:800;letter-spacing:.02em;display:flex;align-items:center;gap:8px}
+.brand i{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
+.badge{font-size:11px;color:var(--accent);border:1px solid var(--line);background:color-mix(in srgb,var(--card) 80%, transparent);padding:3px 8px;border-radius:999px}
+.grow{flex:1}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ctrl label{font-size:12px;color:var(--muted)}
+input[type=range]{accent-color:var(--accent)}
+.btn{appearance:none;border:1px solid var(--line);background:var(--card);color:var(--text);padding:7px 10px;border-radius:10px;cursor:pointer;font-weight:700;font-size:13px}
+.btn:hover{filter:brightness(1.15)}.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.ghost{background:color-mix(in srgb,var(--card) 85%, var(--line))}
+.pill{border:1px solid var(--line);background:var(--card);color:var(--text);padding:6px 9px;border-radius:999px;font-size:12px}
+.pill.warn{border-color:#e11d48;background:#fff1f2;color:#9f1239}[data-theme="dark"] .pill.warn,[data-theme=""] .pill.warn{border-color:#7a2b2b;background:#2a1220;color:#ffc9c9}
+#layout{max-width:1280px;margin:0 auto;padding:10px 14px;display:grid;grid-template-columns:1.75fr .95fr;gap:12px}
+@media(max-width:980px){#layout{grid-template-columns:1fr}}
+#map{height:66vh;min-height:420px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--mapbg)}
+.card{border:1px solid var(--line);background:var(--card);border-radius:14px;overflow:hidden}
+.card h3{margin:0;padding:12px 14px;border-bottom:1px solid var(--line);font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.card .body{padding:12px 14px}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.kpi{border:1px solid var(--line);background:color-mix(in srgb,var(--card) 90%, var(--line));border-radius:12px;padding:10px}
+.kpi b{font-size:18px}
+.kpi span{color:var(--muted);font-size:11px;display:block}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.legend{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.legend i{width:14px;height:14px;border-radius:3px;border:1px solid #ffffff20;display:inline-block}
+.timeline{display:flex;gap:8px;align-items:center}
+.timeline input{flex:1}
+.muted{color:var(--muted);font-size:12px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+canvas{max-width:100%}
+#chartWrap{height:220px}
+.notice{font-size:12px;color:var(--muted);background:color-mix(in srgb,var(--card) 90%, var(--bg));border:1px dashed var(--line);padding:8px 10px;border-radius:10px}
+.leaflet-control-attribution{background:color-mix(in srgb,var(--bg) 85%, transparent)!important;color:var(--muted)!important}
+.shot-preview{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--card)}
+.shot-preview img{width:100%;display:block}
+.place{font-weight:700}
+</style>
+</head>
+<body>
+<div id="top">
+  <div class="wrap">
+    <div class="brand"><i></i> India Radar <span class="badge">RainViewer • Leaflet</span> <span class="badge">CORS-safe • Screenshot</span></div>
+    <div class="grow"></div>
+    <div class="ctrl">
+      <span class="pill" id="status">Loading radar…</span>
+      <label>Opacity <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.72"/></label>
+      <label>Snow <input id="snow" type="checkbox" checked/></label>
+      <label>Smooth <input id="smooth" type="checkbox" checked/></label>
+      <button class="btn" id="themeBtn" title="Toggle dark / light">🌙 Dark</button>
+      <button class="btn" id="locBtn">📍 My location</button>
+      <button class="btn" id="indiaBtn">🇮🇳 India</button>
+    </div>
+  </div>
+  <div class="wrap" style="padding-top:0">
+    <div class="timeline" style="flex:1">
+      <button class="btn primary" id="play">▶ Play</button>
+      <input id="timeSlider" type="range" min="0" max="0" value="0" disabled/>
+      <span class="pill mono" id="timeLabel">—</span>
+      <button class="btn ghost" id="shotMapBtn">📸 Map PNG</button>
+      <button class="btn ghost" id="shotPageBtn">🖼️ Page PNG</button>
+      <span class="muted" id="frameInfo">Past 2h • 10-min steps • auto-refresh 10 min</span>
+    </div>
+  </div>
+  <div class="wrap" style="padding-top:0">
+    <span class="pill warn" id="corsNote" style="display:none">Tiles blocked — retrying with CORS-safe base…</span>
+    <span class="muted" id="archiveHint">Archive: PNGs saved by datetime (UTC) — see <span class="mono">/archive/YYYY/MM/DD/HHMM.png</span> • scheduler polls <span class="mono">weather-maps.json</span> every 10 min.</span>
+  </div>
+</div>
+
+<div id="layout">
+  <div id="map" aria-label="Radar map"></div>
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div class="card">
+      <h3>Click on map → values</h3>
+      <div class="body">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div>
+            <div class="place" id="placeName">No point selected — click anywhere on India</div>
+            <div class="mono muted" id="coord">—</div>
+          </div>
+          <button class="btn" id="copyBtn">Copy JSON</button>
+        </div>
+        <div class="kpis" style="margin-top:10px">
+          <div class="kpi"><span>dBZ (reflectivity)</span><b id="vDbz">—</b><span id="vDesc">—</span></div>
+          <div class="kpi"><span>Rain rate</span><b id="vRain">—</b><span>mm/h (Z=200R¹·⁶)</span></div>
+          <div class="kpi"><span>Intensity</span><b id="vCat">—</b><span id="vColor" style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid #ffffff30"></span> <span id="vHex" class="mono">—</span></div>
+        </div>
+        <div style="margin-top:10px" class="legend" id="legend"></div>
+        <div style="margin-top:10px" class="notice">Value decoded from tile pixel → Universal Blue table → dBZ → rain. Transparent = no echo. Reverse geocode via OpenStreetMap Nominatim.</div>
+        <div class="muted" style="margin-top:8px">Attribution: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">Weather data by RainViewer</a> • Place names © OpenStreetMap</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Location timeseries — past 2 hours</h3>
+      <div class="body">
+        <div id="chartWrap"><canvas id="chart"></canvas></div>
+        <div class="row" style="margin-top:8px">
+          <span class="pill" id="tsStatus">Click map to build timeseries</span>
+          <button class="btn" id="csvBtn">Download CSV</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card shot-preview" id="shotCard" style="display:none">
+      <h3>Last screenshot</h3>
+      <div class="body" style="padding:0">
+        <img id="shotImg" alt="Screenshot preview"/>
+        <div style="padding:10px;display:flex;gap:8px;flex-wrap:wrap">
+          <a id="shotDl" class="btn primary" download="india-radar.png">⬇ Download PNG</a>
+          <button class="btn" id="shotClose">Close</button>
+          <span class="muted" id="shotMeta"></span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const INDIA = [20.5937,78.9629];
+let map = L.map('map',{zoomControl:true, worldCopyJump:true}).setView(INDIA,5);
+
+// theme
+const themeBtn=document.getElementById('themeBtn');
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  document.body.setAttribute('data-theme', t);
+  themeBtn.textContent = t==='light' ? '🌙 Dark' : '☀️ Light';
+  localStorage.setItem('radar-theme', t);
+  // swap basemap
+  if(t==='light'){
+    if(typeof cartoDark!=='undefined' && map.hasLayer(cartoDark)) map.removeLayer(cartoDark);
+    if(typeof cartoLight!=='undefined') cartoLight.addTo(map);
+    if(typeof radarLayer!=='undefined' && radarLayer) radarLayer.bringToFront();
+  } else {
+    if(typeof cartoLight!=='undefined' && map.hasLayer(cartoLight)) map.removeLayer(cartoLight);
+    if(typeof cartoDark!=='undefined') cartoDark.addTo(map);
+    if(typeof radarLayer!=='undefined' && radarLayer) radarLayer.bringToFront();
+  }
+}
+let savedTheme = localStorage.getItem('radar-theme');
+if(!savedTheme) savedTheme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+
+let host="", past=[], radarLayer=null, frameIdx=0, playing=false, playTimer=null;
+let selectedLatLng=null, lastSeries=[];
+let colorMap = new Map();
+
+const cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+  maxZoom:19, subdomains:'abcd', attribution:'© OpenStreetMap © CARTO | Weather: RainViewer', crossOrigin:true
+});
+const cartoLight = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{
+  maxZoom:19, subdomains:'abcd', attribution:'© OpenStreetMap © CARTO | Weather: RainViewer', crossOrigin:true
+});
+(savedTheme==='light' ? cartoLight : cartoDark).addTo(map);
+applyTheme(savedTheme);
+themeBtn.addEventListener('click', ()=> applyTheme(document.documentElement.getAttribute('data-theme')==='light' ? 'dark' : 'light'));
+
+function dBZToRain(dBZ){
+  if(dBZ==null || dBZ<-10) return 0;
+  const Z = Math.pow(10, dBZ/10);
+  return Math.pow(Z/200, 1/1.6);
+}
+function category(dBZ){
+  if(dBZ==null) return "—";
+  if(dBZ<15) return "No / very light";
+  if(dBZ<25) return "Light";
+  if(dBZ<35) return "Moderate";
+  if(dBZ<45) return "Heavy";
+  if(dBZ<55) return "Very heavy";
+  return "Extreme / hail";
+}
+
+const els = {
+  status: document.getElementById('status'),
+  corsNote: document.getElementById('corsNote'),
+  opacity: document.getElementById('opacity'),
+  snow: document.getElementById('snow'),
+  smooth: document.getElementById('smooth'),
+  slider: document.getElementById('timeSlider'),
+  timeLabel: document.getElementById('timeLabel'),
+  play: document.getElementById('play'),
+  placeName: document.getElementById('placeName'),
+  coord: document.getElementById('coord'),
+  vDbz: document.getElementById('vDbz'),
+  vRain: document.getElementById('vRain'),
+  vCat: document.getElementById('vCat'),
+  vColor: document.getElementById('vColor'),
+  vHex: document.getElementById('vHex'),
+  vDesc: document.getElementById('vDesc'),
+  legend: document.getElementById('legend'),
+  tsStatus: document.getElementById('tsStatus'),
+  chart: document.getElementById('chart'),
+};
+
+const stops = [
+  ["No echo","transparent"],["Light","#4caf50"],["Moderate","#ffeb3b"],["Heavy","#ff9800"],["Very heavy","#f44336"],["Extreme","#9c27b0"],["Snow/ice","#00e5ff"]
+];
+els.legend.innerHTML = stops.map(([l,c])=> `<span style="display:inline-flex;align-items:center;gap:6px"><i style="background:${c==='transparent'?'repeating-linear-gradient(45deg,#1a2746 0 6px,#0f1c33 6px 12px)':c}"></i>${l}</span>`).join(" ");
+
+function setRadarLayer(idx){
+  if(!past.length) return;
+  frameIdx = Math.max(0,Math.min(idx,past.length-1));
+  const f = past[frameIdx];
+  const smooth = els.smooth.checked?1:0;
+  const snow = els.snow.checked?1:0;
+  const url = host + f.path + '/256/{z}/{x}/{y}/2/'+smooth+'_'+snow+'.png';
+  if(radarLayer) map.removeLayer(radarLayer);
+  radarLayer = L.tileLayer(url,{
+    opacity: parseFloat(els.opacity.value),
+    maxZoom: 14, maxNativeZoom:7, tileSize:256,
+    crossOrigin:'anonymous',
+    keepBuffer:2, updateWhenIdle:false, updateWhenZooming:false,
+    errorTileUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII='
+  });
+  let errCount=0;
+  radarLayer.on('tileerror',()=>{ errCount++; if(errCount>6){ els.corsNote.style.display='inline-block'; els.corsNote.textContent='Some radar tiles failed (outside coverage or 404) — try another location/frame.'; } });
+  radarLayer.on('load',()=>{ if(errCount===0) els.corsNote.style.display='none'; });
+  radarLayer.addTo(map);
+  radarLayer.bringToFront();
+  els.slider.value = frameIdx;
+  const d = new Date(f.time*1000);
+  els.timeLabel.textContent = d.toLocaleString() + " • "+frameIdx+"/"+(past.length-1);
+}
+
+async function loadWeatherMaps(){
+  try{
+    els.status.textContent="Fetching weather-maps.json…";
+    const r = await fetch('https://api.rainviewer.com/public/weather-maps.json',{cache:'no-store'});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const j = await r.json();
+    host = j.host;
+    past = j.radar.past || [];
+    if(!past.length) throw new Error("No past frames");
+    const prevIdx = frameIdx;
+    els.slider.max = String(past.length-1);
+    els.slider.disabled=false;
+    els.status.textContent = `Ready • ${past.length} frames • ${host}`;
+    // keep near latest if was at end
+    const target = (prevIdx >= past.length-2) ? past.length-1 : Math.min(prevIdx, past.length-1);
+    setRadarLayer(target);
+    if(!colorMap.size) loadColorCSV();
+  }catch(e){
+    els.status.textContent="Failed: "+e.message+" — retry in 30s";
+    els.corsNote.style.display='inline-block';
+    els.corsNote.textContent='weather-maps.json blocked — check adblock/CORS. Retrying…';
+  }
+}
+async function loadColorCSV(){
+  try{
+    const r = await fetch('https://www.rainviewer.com/files/rainviewer_api_colors_table.csv',{cache:'no-store'});
+    const t = await r.text();
+    const lines = t.trim().split(/\r?\n/);
+    const header = lines[0].split(',');
+    let colIdx = header.findIndex(h=>/universal/i.test(h));
+    if(colIdx<0) colIdx=2;
+    colorMap.clear();
+    for(let i=1;i<lines.length;i++){
+      const cols = lines[i].split(',');
+      const dbz = parseInt(cols[0],10);
+      const hex = (cols[colIdx]||"").trim().toLowerCase();
+      if(!hex) continue;
+      const base = hex.slice(0,7);
+      if(base==="#000000") continue;
+      if(!colorMap.has(base)) colorMap.set(base, dbz);
+      colorMap.set(hex, dbz);
+    }
+    els.status.textContent += " • color table";
+  }catch(e){}
+}
+
+function latLngToTile(lat,lon,z){
+  const x = Math.floor((lon+180)/360 * Math.pow(2,z));
+  const latRad = lat*Math.PI/180;
+  const y = Math.floor((1 - Math.log(Math.tan(latRad)+1/Math.cos(latRad))/Math.PI)/2 * Math.pow(2,z));
+  const n = Math.pow(2,z)*256;
+  const px = Math.floor((lon+180)/360 * n) %256;
+  const py = Math.floor((1 - Math.log(Math.tan(latRad)+1/Math.cos(latRad))/Math.PI)/2 * n) %256;
+  return {x,y,px,py};
+}
+function rgbaToHex(r,g,b,a){
+  if(a===0) return "transparent";
+  return "#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join("");
+}
+function hexToDbz(hex){
+  if(!hex || hex==="transparent") return null;
+  const low = hex.toLowerCase().slice(0,7);
+  if(colorMap.has(low)) return colorMap.get(low);
+  if(colorMap.has(hex.toLowerCase())) return colorMap.get(hex.toLowerCase());
+  return approxDbzFromHex(low);
+}
+function approxDbzFromHex(hex){
+  const map = {"#005a00":5,"#00ff00":22,"#ffff00":35,"#ffaa00":40,"#ff5500":45,"#ff0000":50,"#b00000":55,"#ff00ff":60,"#8a00ff":62,"#0000ff":55,"#00aaff":45,"#ffffff":70};
+  return map[hex] ?? null;
+}
+async function sampleTileFrame(frame, lat, lon){
+  const z=7;
+  const {x,y,px,py} = latLngToTile(lat,lon,z);
+  const smooth = els.smooth.checked?1:0;
+  const snow = els.snow.checked?1:0;
+  const url = host + frame.path + `/256/${z}/${x}/${y}/2/${smooth}_${snow}.png`;
+  return new Promise(resolve=>{
+    const img = new Image();
+    img.crossOrigin="anonymous";
+    img.onload=()=>{
+      try{
+        const c=document.createElement('canvas'); c.width=256; c.height=256;
+        const ctx=c.getContext('2d'); ctx.drawImage(img,0,0);
+        const d=ctx.getImageData(px,py,1,1).data;
+        const hex=rgbaToHex(d[0],d[1],d[2],d[3]);
+        const dbz = hexToDbz(hex);
+        const rain = dbz==null?0:dBZToRain(dbz);
+        resolve({time:frame.time, hex, dbz, rain, ok:true});
+      }catch(e){ resolve({time:frame.time, hex:"—", dbz:null, rain:0, ok:false, err:e.message}); }
+    };
+    img.onerror=()=> resolve({time:frame.time, hex:"—", dbz:null, rain:0, ok:false, err:"tile load failed"});
+    img.src=url;
+  });
+}
+
+async function reverseGeocode(lat,lon){
+  try{
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&accept-language=en`;
+    const r = await fetch(url, {headers:{'Accept':'application/json'}});
+    if(!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    return j.display_name || j.name || "";
+  }catch(e){ return ""; }
+}
+
+let chartInst=null;
+function renderChart(series){
+  const labels = series.map(s=> new Date(s.time*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
+  const dbzVals = series.map(s=> s.dbz);
+  const rainVals = series.map(s=> Number(s.rain.toFixed(2)));
+  if(chartInst) chartInst.destroy();
+  chartInst = new Chart(els.chart,{
+    type:'line',
+    data:{ labels, datasets:[
+      {label:'dBZ', data: dbzVals, tension:.35, pointRadius:3, borderWidth:2, yAxisID:'y'},
+      {label:'mm/h', data: rainVals, tension:.35, pointRadius:3, borderWidth:2, yAxisID:'y1'}
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index', intersect:false},
+      plugins:{legend:{labels:{color: getComputedStyle(document.body).color}}},
+      scales:{
+        x:{ticks:{color:'#8ea0c3', maxRotation:0, autoSkip:true, maxTicksLimit:8}, grid:{color:'color-mix(in srgb, var(--line) 60%, transparent)'}},
+        y:{position:'left', title:{display:true,text:'dBZ',color:'#8ea0c3'}, ticks:{color:'#8ea0c3'}, grid:{color:'color-mix(in srgb, var(--line) 60%, transparent)'}},
+        y1:{position:'right', title:{display:true,text:'mm/h',color:'#8ea0c3'}, ticks:{color:'#8ea0c3'}, grid:{display:false}}
+      }
+    }
+  });
+}
+async function onMapClick(e){
+  selectedLatLng = e.latlng;
+  const lat = +selectedLatLng.lat.toFixed(4), lon=+selectedLatLng.lng.toFixed(4);
+  els.placeName.textContent = "Resolving place…";
+  els.coord.textContent = `${lat}, ${lon}  • sampling ${past.length} frames…`;
+  els.tsStatus.textContent = "Sampling tiles…";
+  if(window._pin) map.removeLayer(window._pin);
+  window._pin = L.circleMarker([lat,lon],{radius:7, color:'#22d3ee', weight:2, fillColor:'#22d3ee', fillOpacity:.35}).addTo(map).bindPopup(`${lat}, ${lon}`).openPopup();
+  // fire geocode in parallel
+  reverseGeocode(lat,lon).then(name=>{
+    els.placeName.textContent = name ? name : `${lat}, ${lon}`;
+    els.coord.textContent = name ? `${lat}, ${lon} • ${name}` : `${lat}, ${lon}`;
+    if(window._pin) window._pin.setPopupContent(name ? `${name}<br><span class="mono">${lat}, ${lon}</span>` : `${lat}, ${lon}`);
+  });
+  const series=[];
+  for(const f of past){ const s = await sampleTileFrame(f, lat, lon); series.push(s); }
+  lastSeries = series.map(s=> ({...s, lat, lon, place: els.placeName.textContent}));
+  renderChart(series);
+  const cur = series[frameIdx] || series[series.length-1];
+  updateKPIs(cur);
+  const hasData = series.some(s=>s.dbz!=null);
+  els.tsStatus.textContent = hasData ? `Timeseries ready • ${series.length} points` : "No echo at this location in past 2h";
+  els.coord.textContent = `${lat}, ${lon}` + (els.placeName.textContent && els.placeName.textContent!==`${lat}, ${lon}` ? ` • ${els.placeName.textContent}` : ``) + ` • frame ${frameIdx} of ${series.length-1}`;
+}
+function updateKPIs(s){
+  els.vDbz.textContent = s.dbz==null? "—" : Number(s.dbz).toFixed(1);
+  els.vRain.textContent = s.rain ? s.rain.toFixed(2) : "0.00";
+  els.vCat.textContent = category(s.dbz);
+  els.vHex.textContent = s.hex || "—";
+  els.vDesc.textContent = s.hex==="transparent" ? "clear" : category(s.dbz);
+  els.vColor.style.background = s.hex==="transparent" ? "repeating-linear-gradient(45deg,#1a2746 0 6px,#0f1c33 6px 12px)" : (s.hex||"transparent");
+}
+map.on('click', onMapClick);
+
+// controls
+els.opacity.addEventListener('input', ()=>{ if(radarLayer) radarLayer.setOpacity(parseFloat(els.opacity.value)); });
+els.smooth.addEventListener('change', ()=> setRadarLayer(frameIdx));
+els.snow.addEventListener('change', ()=> setRadarLayer(frameIdx));
+els.slider.addEventListener('input', (e)=>{
+  setRadarLayer(parseInt(e.target.value,10));
+  if(selectedLatLng && lastSeries.length){
+    const cur = lastSeries[parseInt(e.target.value,10)];
+    if(cur) updateKPIs(cur);
+  }
+});
+els.play.addEventListener('click', ()=>{
+  playing=!playing;
+  els.play.textContent = playing ? "⏸ Pause" : "▶ Play";
+  if(playing){
+    playTimer=setInterval(()=>{ let n=frameIdx+1; if(n>=past.length) n=0; setRadarLayer(n); if(selectedLatLng && lastSeries[n]) updateKPIs(lastSeries[n]); }, 650);
+  } else clearInterval(playTimer);
+});
+document.getElementById('indiaBtn').addEventListener('click', ()=> map.setView(INDIA,5));
+document.getElementById('locBtn').addEventListener('click', ()=>{
+  if(!navigator.geolocation) return alert("Geolocation not available");
+  navigator.geolocation.getCurrentPosition(p=> map.setView([p.coords.latitude,p.coords.longitude],8), ()=> alert("Location denied"));
+});
+document.getElementById('copyBtn').addEventListener('click', ()=>{
+  const payload = lastSeries.length? lastSeries : {note:"Click map first", clicked:selectedLatLng};
+  navigator.clipboard.writeText(JSON.stringify(payload,null,2)).then(()=>{ const b=document.getElementById('copyBtn'); const t=b.textContent; b.textContent="Copied!"; setTimeout(()=>b.textContent=t,1200);});
+});
+document.getElementById('csvBtn').addEventListener('click', ()=>{
+  if(!lastSeries.length) return alert("Click map first");
+  const rows = [["time_iso","unix","lat","lon","place","hex","dBZ","rain_mm_per_h","category"]];
+  lastSeries.forEach(s=> rows.push([new Date(s.time*1000).toISOString(), s.time, s.lat, s.lon, s.place||"", s.hex, s.dbz==null?"":s.dbz, s.rain.toFixed(3), category(s.dbz)]));
+  const csv = rows.map(r=> r.map(v=> `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download=`radar-timeseries-${Date.now()}.csv`; a.click();
+});
+
+// --- screenshot ---
+async function doScreenshot(target){
+  const btnMap=document.getElementById('shotMapBtn'), btnPage=document.getElementById('shotPageBtn');
+  const prevM=btnMap.textContent, prevP=btnPage.textContent;
+  btnMap.disabled=btnPage.disabled=true;
+  btnMap.textContent='⏳ Capturing…';
+  try{
+    const el = target==='map' ? document.getElementById('map') : document.body;
+    const canvas = await html2canvas(el, {
+      useCORS:true, allowTaint:false, backgroundColor: getComputedStyle(document.body).backgroundColor || '#0b1220',
+      scale:2, logging:false, foreignObjectRendering:false,
+      ignoreElements: el2 => el2.id==='shotCard'
+    });
+    const url = canvas.toDataURL('image/png');
+    document.getElementById('shotImg').src=url;
+    const a=document.getElementById('shotDl');
+    a.href=url; a.download = target==='map' ? `india-radar-map-${Date.now()}.png` : `india-radar-page-${Date.now()}.png`;
+    document.getElementById('shotCard').style.display='block';
+    document.getElementById('shotMeta').textContent = `${canvas.width}×${canvas.height} • ${target==='map'?'map':'full page'} • ${new Date().toLocaleString()}`;
+    document.getElementById('shotCard').scrollIntoView({behavior:'smooth',block:'nearest'});
+  }catch(e){
+    alert("Screenshot failed: "+e.message+"\nTip: disable adblock for tilecache.rainviewer.com and try again.");
+  }finally{
+    btnMap.disabled=btnPage.disabled=false;
+    btnMap.textContent=prevM; btnPage.textContent='🖼️ Page PNG';
+    document.getElementById('shotMapBtn').textContent='📸 Map PNG';
+  }
+}
+document.getElementById('shotMapBtn').addEventListener('click', ()=> doScreenshot('map'));
+document.getElementById('shotPageBtn').addEventListener('click', ()=> doScreenshot('page'));
+document.getElementById('shotClose').addEventListener('click', ()=> document.getElementById('shotCard').style.display='none');
+
+loadWeatherMaps();
+// auto-refresh every 10 min (RainViewer step is 10 min, window 2 h)
+setInterval(loadWeatherMaps, 10*60*1000);
+renderChart([{time:Math.floor(Date.now()/1000), dbz:null, rain:0},{time:Math.floor(Date.now()/1000)+600, dbz:null, rain:0}]);
+if(chartInst){ chartInst.data.datasets[0].data=[null,null]; chartInst.update(); }
+</script>
+</body>
+</html>

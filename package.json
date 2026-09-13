@@ -1,0 +1,11 @@
+{
+  "name": "india-radar-api",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "pngjs": "^7.0.0"
+  }
+}
