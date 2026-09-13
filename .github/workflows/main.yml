@@ -3,24 +3,122 @@ on:
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
-  ping:
+  archive:
     runs-on: ubuntu-latest
     steps:
-      - name: Call archive endpoint (or warm RainViewer)
-        env:
-          VERCEL_URL: ${{ secrets.VERCEL_URL }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Fetch latest radar frame and save global tiles to images/YYYY/
         run: |
           set -e
-          if [ -n "$VERCEL_URL" ]; then
-            echo "Pinging $VERCEL_URL/api/cron/archive"
-            curl -fsSL -H "Authorization: Bearer $CRON_SECRET" "$VERCEL_URL/api/cron/archive" | head -c 1000; echo
-            curl -fsSL "$VERCEL_URL/api/radar/frames" | python3 -c "import sys,json; j=json.load(sys.stdin); print(f\"frames={len(j.get('past',[]))} host={j.get('host')}\")"
-          else
-            echo "VERCEL_URL not set — warming RainViewer directly"
-            curl -fsSL https://api.rainviewer.com/public/weather-maps.json | python3 -c "import sys,json; j=json.load(sys.stdin); print(f\"host={j['host']} frames={len(j['radar']['past'])} latest={j['radar']['past'][-1]['time']}\")"
-          fi
-      - name: Direct RainViewer check
+          python3 << 'PY'
+          import json, os, urllib.request, urllib.error, base64, datetime, pathlib, math, sys
+
+          # Fetch weather-maps.json
+          req = urllib.request.Request("https://api.rainviewer.com/public/weather-maps.json", headers={"User-Agent":"radar_api bot"})
+          with urllib.request.urlopen(req) as r:
+              j = json.loads(r.read().decode())
+          host = j["host"]
+          past = j["radar"]["past"]
+          if not past:
+              print("No past frames"); sys.exit(0)
+          latest = past[-1]
+          t = latest["time"]
+          dt = datetime.datetime.utcfromtimestamp(t)
+          yyyy = dt.strftime("%Y")
+          stamp = dt.strftime("%Y%m%d_%H%M")  # UTC
+          path_suffix = latest["path"]  # e.g. /v2/radar/1710000000
+
+          print(f"Latest frame: {t} -> {dt} UTC -> images/{yyyy}/{stamp}.png  host={host} path={path_suffix}")
+
+          # Global tiles: use RainViewer global coverage at z=3 (8x4 = 32 tiles) — lightweight, covers whole earth
+          # For higher res use z=4 (16x8=128) or z=5; z=6 would be 64x32=2048 tiles — too heavy for git.
+          # Choose z=3 for global, composite to one PNG. Adjust Z below if you want more detail.
+          Z = 3
+          NX = 2**Z
+          NY = 2**Z // 2 * 2  # square-ish; actual Y tiles = 2**Z (merator clipped, but fetch all and composite)
+
+          # Composite: create canvas NX*256 x NY*256
+          try:
+              from PIL import Image
+              import io
+          except ImportError:
+              os.system("pip install Pillow -q")
+              from PIL import Image
+              import io
+
+          W, H = NX*256, 2**Z*256
+          canvas = Image.new("RGBA", (W, H), (0,0,0,0))
+
+          def fetch_tile(x,y):
+              url = f"{host}{path_suffix}/256/{Z}/{x}/{y}/2/1_1.png"
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent":"radar_api bot"})
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      return Image.open(io.BytesIO(r.read())).convert("RGBA")
+              except Exception as e:
+                  # 404 = no coverage at that tile, keep transparent
+                  return None
+
+          # Fetch all tiles
+          import concurrent.futures
+          tiles = {}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+              futs = {(x,y): ex.submit(fetch_tile, x, y) for x in range(NX) for y in range(2**Z)}
+              for (x,y), fut in futs.items():
+                  tiles[(x,y)] = fut.result()
+
+          fetched = sum(1 for v in tiles.values() if v is not None)
+          print(f"Fetched {fetched}/{NX*2**Z} tiles at z={Z}")
+
+          for (x,y), img in tiles.items():
+              if img is not None:
+                  canvas.paste(img, (x*256, y*256), img)
+
+          # Also create a 2x thumbnail for quick preview
+          thumb = canvas.copy()
+          thumb.thumbnail((1024, 512))
+
+          out_dir = pathlib.Path(f"images/{yyyy}")
+          out_dir.mkdir(parents=True, exist_ok=True)
+          out_path = out_dir / f"{stamp}.png"
+          thumb_path = out_dir / f"{stamp}_thumb.png"
+
+          # Skip if already exists (idempotent)
+          if out_path.exists():
+              print(f"Already exists: {out_path} — skip")
+          else:
+              canvas.save(out_path, "PNG", optimize=True)
+              thumb.save(thumb_path, "PNG", optimize=True)
+              print(f"Saved {out_path} ({out_path.stat().st_size} bytes) + {thumb_path}")
+
+              # Update manifest images/YYYY/manifest.json
+              manifest_path = out_dir / "manifest.json"
+              if manifest_path.exists():
+                  manifest = json.loads(manifest_path.read_text())
+              else:
+                  manifest = []
+              manifest.append({"time": t, "iso": dt.isoformat()+"Z", "path": path_suffix, "file": f"{stamp}.png", "thumb": f"{stamp}_thumb.png", "z": Z, "host": host})
+              # dedup by time, sort
+              seen = {}
+              for e in manifest: seen[e["time"]] = e
+              manifest = sorted(seen.values(), key=lambda e: e["time"])
+              manifest_path.write_text(json.dumps(manifest, indent=2))
+              print(f"Updated {manifest_path} ({len(manifest)} entries)")
+
+          PY
+      - name: Commit and push if changed
         run: |
-          curl -fsSL https://api.rainviewer.com/public/weather-maps.json | python3 -c "import sys,json; j=json.load(sys.stdin); print(f\"generated={j.get('generated')} past={len(j['radar']['past'])}\")"
+          git config user.name "radar-bot"
+          git config user.email "radar-bot@users.noreply.github.com"
+          git add images/
+          if git diff --cached --quiet; then
+            echo "No new images — nothing to commit"
+          else
+            git commit -m "chore: archive radar $(date -u +%Y%m%d_%H%M) global z3"
+            git push
+          fi
