@@ -20,8 +20,9 @@ jobs:
   archive:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # Node 24 action majors — silences the "Node.js 20 is deprecated" runner warning.
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: '3.11' }
       - name: Fetch latest radar frame and save global tiles to images/YYYY/
         run: |
