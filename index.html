@@ -297,7 +297,7 @@ async function loadWeatherMaps(){
 }
 async function loadColorCSV(){
   try{
-    const r = await fetch('https://www.rainviewer.com/files/rainviewer_api_colors_table.csv',{cache:'no-store'});
+    const r = await fetch(`${API_BASE}/api/rainviewer-colors`,{cache:'no-store'}).catch(()=> fetch('https://www.rainviewer.com/files/rainviewer_api_colors_table.csv',{cache:'no-store'}));
     const t = await r.text();
     const lines = t.trim().split(/\r?\n/);
     const header = lines[0].split(',');
