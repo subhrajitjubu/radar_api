@@ -1,45 +1,58 @@
 /**
- * DAMINI (IITM) proxy — handles WEBAPP_SESSION cookie + forwards to /api/proxy/layer/
- * GET /api/damini?interval=15
- * 15/30/60 map to layer interval; class=0,1; hosts the session cookie server-side so client has no CORS pain.
+ * DAMINI flashes proxy — uses export/proxy + api_key (same pattern as alerts/tracks)
+ * GET /api/damini?interval=15&clip=1
  */
-let sessionCache = null; // { cookie: string, at: number }
-async function getSession() {
-  if (sessionCache && Date.now() - sessionCache.at < 10 * 60 * 1000) return sessionCache.cookie;
-  // Warm session by GETting the map page (sets WEBAPP_SESSION)
-  const mapUrl = "https://damini.tropmet.res.in/map/?view=55f5bbb4-5d2c-4602-a334-1572015d861e";
-  const r = await fetch(mapUrl, { headers: { "User-Agent": "radar_api damini proxy" }, redirect: "manual" });
-  const setCookie = r.headers.get("set-cookie") || "";
-  // extract WEBAPP_SESSION
-  const m = setCookie.match(/WEBAPP_SESSION=[^;]+/);
-  const cookie = m ? m[0] : "";
-  if (cookie) sessionCache = { cookie, at: Date.now() };
-  return cookie;
+const LAYER_ID = "4c0c8109_d688_4887_a91e_c5cbbab9dd69";
+const API_KEY  = "a2b4c419-6431-4106-9e7e-225eafd08897";
+
+function indiaBbox(lat, lon) {
+  return lat >= 5 && lat <= 40 && lon >= 65 && lon <= 100;
 }
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Vary", "Origin");
   if (req.method === "OPTIONS") return res.status(204).end();
 
-  const interval = [1, 5, 15, 30, 60].includes(parseInt(req.query.interval, 10)) ? String(parseInt(req.query.interval, 10)) : "15";
-  const layerId = req.query.layer_id || "4c0c8109_d688_4887_a91e_c5cbbab9dd69";
+  const interval = [1, 5, 15, 30, 60].includes(parseInt(req.query.interval, 10))
+    ? String(parseInt(req.query.interval, 10)) : "15";
+  const clip = req.query.clip !== "0";
+
+  const inner = `http://10.2.4.57:8585/api/?api_key=${API_KEY}&layer_id=${LAYER_ID}&method=flashes&version=1&interval=${interval}&classification=0,1&precision=nanoseconds`;
+  const url = `https://damini.tropmet.res.in/export/proxy/?mode=native&url=${encodeURIComponent(inner)}`;
 
   try {
-    const cookie = await getSession();
-    const inner = `http://10.2.4.57:8585/api/?method=flashes&version=1&interval=${interval}&classification=0,1&precision=nanoseconds&layer_id=${layerId}`;
-    const url = `https://damini.tropmet.res.in/api/proxy/layer/?layer_id=${layerId}&request=${encodeURIComponent(inner)}`;
-    const headers = { "User-Agent": "radar_api damini proxy", Accept: "application/json" };
-    if (cookie) headers.Cookie = cookie;
-    const r = await fetch(url, { headers, cache: "no-store" });
-    const text = await r.text();
-    // DAMINI returns JSON even on 200; forward as-is with CORS
-    res.setHeader("Content-Type", r.headers.get("content-type") || "application/json");
-    res.setHeader("Cache-Control", "public, max-age=30");
+    const r = await fetch(url, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+
+    const ct = r.headers.get("content-type") || "";
+    if (ct.includes("text/html")) {
+      return res.status(401).json({ error: "upstream returned HTML — api_key may have expired" });
+    }
+
+    let text = await r.text();
+    text = text.replace(/^\uFEFF/, ""); // strip BOM if present
+
+    if (clip) {
+      try {
+        const j = JSON.parse(text);
+        if (Array.isArray(j.features)) {
+          j.features = j.features.filter(f => indiaBbox(f[1], f[0]));
+          text = JSON.stringify(j);
+        }
+      } catch { /* not JSON or unexpected shape — forward as-is */ }
+    }
+
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=60");
+    res.setHeader("X-Source", url);
     if (!r.ok) return res.status(r.status).send(text);
     res.send(text);
   } catch (e) {
-    res.status(502).json({ error: e.message });
+    res.status(502).json({ error: e.message || "fetch failed", source: url });
   }
 }
