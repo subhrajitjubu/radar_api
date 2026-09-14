@@ -1,7 +1,8 @@
 /**
  * ILDN proxy — bypasses CORS for https://ildn.in/imap-data.php
- * GET /api/ildn?span=90           raw 32-byte binary (default)
- * GET /api/ildn?span=90&format=json  JSON array of strikes (for debugging / non-Leaflet use)
+ * GET  /api/ildn?span=90              raw 32-byte binary (default, Leaflet compatible)
+ * GET  /api/ildn?span=90&format=json  JSON array {span, count, records[]}
+ * HEAD /api/ildn?span=90              headers only (for the map's proxy probe)
  * Binary layout LE per 32-byte record: Float64 unix@0, Float32 lat@8, Float32 lon@12,
  *   Float32 age_min@16, Uint64 id@24
  */
@@ -27,7 +28,7 @@ export default async function handler(req, res) {
       headers: { "User-Agent": "radar_api ildn proxy", Accept: "*/*" },
       cache: "no-store",
       signal: ctrl.signal,
-      redirect: "manual",
+      redirect: "follow",
     });
     clearTimeout(to);
   } catch (e) {
@@ -40,15 +41,16 @@ export default async function handler(req, res) {
       body: body.slice(0, 300),
     });
   }
-  const buf = Buffer.from(await upstream.arrayBuffer());
+  const rawBuf = await upstream.arrayBuffer();
+  const buf = new Uint8Array(rawBuf);
+  const count = Math.floor(buf.byteLength / 32);
 
-  // optional JSON decode on the server
+  // JSON debug view — note upstream `age_min` looks stale (e.g. 5000+). We decode faithfully.
   if (wantJson) {
     const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-    const n = buf.byteLength / 32;
-    const rows = [];
-    for (let i = 0, off = 0; i < n; i++, off += 32) {
-      rows.push({
+    const records = [];
+    for (let i = 0, off = 0; i < count; i++, off += 32) {
+      records.push({
         unix: dv.getFloat64(off + 0, true),
         lat: dv.getFloat32(off + 8, true),
         lon: dv.getFloat32(off + 12, true),
@@ -56,26 +58,23 @@ export default async function handler(req, res) {
         id: dv.getBigUint64(off + 24, true).toString(),
       });
     }
-    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=60");
     res.setHeader("X-Source", url);
-    res.setHeader("X-Count", String(n));
+    res.setHeader("X-Count", String(count));
     res.setHeader("X-Record-Bytes", "32");
-    return res.status(200).send(JSON.stringify({ span, count: n, records: rows }));
+    if (req.method === "HEAD") return res.status(200).end();
+    return res.status(200).send(JSON.stringify({ span, count, records }));
   }
 
-  // raw binary (Leaflet default)
-  if (req.method === "HEAD") {
-    res.setHeader("Content-Type", "application/octet-stream");
-    res.setHeader("Content-Length", String(buf.byteLength));
-    res.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=60");
-    res.setHeader("X-Source", url);
-    res.setHeader("X-Count", String(Math.floor(buf.byteLength / 32)));
-    return res.status(200).end();
-  }
   res.setHeader("Content-Type", "application/octet-stream");
   res.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=60");
   res.setHeader("X-Source", url);
-  res.setHeader("X-Count", String(Math.floor(buf.byteLength / 32)));
-  res.send(buf);
+  res.setHeader("X-Count", String(count));
+  res.setHeader("X-Record-Bytes", "32");
+  if (req.method === "HEAD") {
+    res.setHeader("Content-Length", String(buf.byteLength));
+    return res.status(200).end();
+  }
+  res.send(Buffer.from(buf));
 }
