@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ILDN + Damini - Leaflet Demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>html,body,#map{height:100%;margin:0}#note{position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:1000;background:#fff;padding:6px 10px;border-radius:8px;font:12px system-ui;box-shadow:0 2px 8px rgba(0,0,0,.2)}</style>
+</head>
+<body>
+<div id="note">ILDN red &lt;30m / yellow 30-60 / green 60-90 &nbsp;|&nbsp; Damini peak&lt;0 red else blue</div>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="./leaflet_ildn_layer.js"></script>
+<script src="./leaflet_damini_layer.js"></script>
+<script>
+const map = L.map('map').setView([23, 80], 5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 9, attribution: '&copy; OSM'}).addTo(map);
+map.setMaxBounds([[5,65],[40,100]]);
+
+// ILDN: same-origin works; cross-origin hit CORS - set proxyUrl to your backend
+const ildnGroup = L.layerGroup().addTo(map);
+addILDNLayer(map, { layerGroup: ildnGroup, span: 90, refreshMs: 60000 });
+// If CORS blocked, host a proxy that does: GET https://ildn.in/imap-data.php?ut=latest&span=90 -> return raw bytes + Access-Control-Allow-Origin
+// then use: addILDNLayer(map, { proxyUrl: "/api/ildn?span=90" });
+
+// Damini: requires WEBAPP_SESSION cookie; same-origin on damini.tropmet.res.in works
+// Else use your backend proxy that holds the cookie and forwards to /api/proxy/layer/
+const daminiGroup = L.layerGroup().addTo(map);
+addDaminiLayer(map, { layerGroup: daminiGroup, interval: 15, refreshMs: 300000 });
+// Cross-origin alternative:
+// addDaminiLayer(map, { proxyUrl: "/api/damini?interval=15", layerGroup: daminiGroup });
+
+L.control.layers(null, {
+  "ILDN (90 min)": ildnGroup,
+  "Damini ENTLN (15 min)": daminiGroup
+}, {collapsed: false}).addTo(map);
+</script>
+</body>
+</html>
