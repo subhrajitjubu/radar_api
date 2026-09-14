@@ -2,18 +2,6 @@
   "functions": {
     "api/**/*.js": {
       "maxDuration": 30
-    },
-    "api/damini-raster.js": {
-      "regions": ["bom1"],
-      "maxDuration": 30
-    },
-    "api/damini-tracks.js": {
-      "regions": ["bom1"],
-      "maxDuration": 30
-    },
-    "api/damini-alerts.js": {
-      "regions": ["bom1"],
-      "maxDuration": 30
     }
   }
 }
