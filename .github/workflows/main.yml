@@ -1,10 +1,21 @@
 name: radar-archive
+# NOTE: GitHub's `schedule` event is BEST-EFFORT, not a guarantee.
+# A `*/10` cron on a low-activity repo typically fires every 30-120+ min, and
+# GitHub can drop queued scheduled runs entirely under load (worst at :00).
+# For a true 10-min cadence use an external cron that calls workflow_dispatch:
+#   curl -X POST -H "Authorization: Bearer <PAT>" -H "Accept: application/vnd.github+json" \
+#     https://api.github.com/repos/subhrajitjubu/radar_api/actions/workflows/main.yml/dispatches \
+#     -d '{"ref":"main"}'
+# (PAT needs Actions: Read and write.)
 on:
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: radar-archive
+  cancel-in-progress: false
 jobs:
   archive:
     runs-on: ubuntu-latest
@@ -35,14 +46,11 @@ jobs:
 
           print(f"Latest frame: {t} -> {dt} UTC -> images/{yyyy}/{stamp}.png  host={host} path={path_suffix}")
 
-          # Global tiles: use RainViewer global coverage at z=3 (8x4 = 32 tiles) — lightweight, covers whole earth
-          # For higher res use z=4 (16x8=128) or z=5; z=6 would be 64x32=2048 tiles — too heavy for git.
-          # Choose z=3 for global, composite to one PNG. Adjust Z below if you want more detail.
+          # Global tiles: z=3 => 8x8 = 64 tiles of 256px, composite into one PNG.
           Z = 3
           NX = 2**Z
-          NY = 2**Z // 2 * 2  # square-ish; actual Y tiles = 2**Z (merator clipped, but fetch all and composite)
+          NY = 2**Z
 
-          # Composite: create canvas NX*256 x NY*256
           try:
               from PIL import Image
               import io
@@ -51,7 +59,7 @@ jobs:
               from PIL import Image
               import io
 
-          W, H = NX*256, 2**Z*256
+          W, H = NX*256, NY*256
           canvas = Image.new("RGBA", (W, H), (0,0,0,0))
 
           def fetch_tile(x,y):
@@ -60,26 +68,24 @@ jobs:
                   req = urllib.request.Request(url, headers={"User-Agent":"radar_api bot"})
                   with urllib.request.urlopen(req, timeout=20) as r:
                       return Image.open(io.BytesIO(r.read())).convert("RGBA")
-              except Exception as e:
+              except Exception:
                   # 404 = no coverage at that tile, keep transparent
                   return None
 
-          # Fetch all tiles
           import concurrent.futures
           tiles = {}
           with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
-              futs = {(x,y): ex.submit(fetch_tile, x, y) for x in range(NX) for y in range(2**Z)}
+              futs = {(x,y): ex.submit(fetch_tile, x, y) for x in range(NX) for y in range(NY)}
               for (x,y), fut in futs.items():
                   tiles[(x,y)] = fut.result()
 
           fetched = sum(1 for v in tiles.values() if v is not None)
-          print(f"Fetched {fetched}/{NX*2**Z} tiles at z={Z}")
+          print(f"Fetched {fetched}/{NX*NY} tiles at z={Z}")
 
           for (x,y), img in tiles.items():
               if img is not None:
                   canvas.paste(img, (x*256, y*256), img)
 
-          # Also create a 2x thumbnail for quick preview
           thumb = canvas.copy()
           thumb.thumbnail((1024, 512))
 
@@ -88,7 +94,6 @@ jobs:
           out_path = out_dir / f"{stamp}.png"
           thumb_path = out_dir / f"{stamp}_thumb.png"
 
-          # Skip if already exists (idempotent)
           if out_path.exists():
               print(f"Already exists: {out_path} — skip")
           else:
@@ -96,14 +101,12 @@ jobs:
               thumb.save(thumb_path, "PNG", optimize=True)
               print(f"Saved {out_path} ({out_path.stat().st_size} bytes) + {thumb_path}")
 
-              # Update manifest images/YYYY/manifest.json
               manifest_path = out_dir / "manifest.json"
               if manifest_path.exists():
                   manifest = json.loads(manifest_path.read_text())
               else:
                   manifest = []
               manifest.append({"time": t, "iso": dt.isoformat()+"Z", "path": path_suffix, "file": f"{stamp}.png", "thumb": f"{stamp}_thumb.png", "z": Z, "host": host})
-              # dedup by time, sort
               seen = {}
               for e in manifest: seen[e["time"]] = e
               manifest = sorted(seen.values(), key=lambda e: e["time"])
@@ -120,5 +123,7 @@ jobs:
             echo "No new images — nothing to commit"
           else
             git commit -m "chore: archive radar $(date -u +%Y%m%d_%H%M) global z3"
+            # rebase in case another scheduled run pushed while we were working
+            git pull --rebase --autostash origin ${GITHUB_REF_NAME}
             git push
           fi
