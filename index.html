@@ -9,6 +9,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="./leaflet_ildn_layer.js"></script>
 <script src="./leaflet_damini_layer.js"></script>
+<script src="./leaflet_damini_export.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -77,8 +78,11 @@ canvas{max-width:100%}
   </div>
   <div class="wrap" style="padding-top:0;gap:8px">
     <span class="pill" style="background:var(--card);border:1px solid var(--line);display:inline-flex;align-items:center;gap:8px">
-      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input id="toggleILDN" type="checkbox" checked/> ILDN (90 min)</label>
-      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input id="toggleDamini" type="checkbox" checked/> Damini (15 min)</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input id="toggleILDN" type="checkbox" checked/> ILDN (90m)</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input id="toggleDamini" type="checkbox" checked/> Damini pulses</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input id="toggleRaster" type="checkbox" checked/> IITM raster</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input id="toggleTracks" type="checkbox" checked/> Tracks (144 cells)</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input id="toggleAlerts" type="checkbox" checked/> Alerts L3 (purple)</label>
     </span>
     <span class="pill" id="lightningStatus">Lightning: loading…</span>
     <span class="pill mono" id="lightningCount" style="display:none">—</span>
@@ -280,8 +284,9 @@ async function loadWeatherMaps(){
     const prevIdx = frameIdx;
     els.slider.max = String(past.length-1);
     els.slider.disabled=false;
-    els.status.textContent = `Ready • ${past.length} frames • ${host}`;
-    const target = (prevIdx >= past.length-2) ? past.length-1 : Math.min(prevIdx, past.length-1);
+    // always jump to latest frame (not first); slider reflects latest
+    els.status.textContent = `Ready • ${past.length} frames • latest ${new Date(past[past.length-1].time*1000).toLocaleTimeString()} • ${host}`;
+    const target = past.length - 1;
     setRadarLayer(target);
     if(!colorMap.size) loadColorCSV();
   }catch(e){
@@ -501,12 +506,14 @@ document.getElementById('shotClose').addEventListener('click', ()=> document.get
 // For the preview (function-compute) the proxy lives on Vercel; point there.
 const API_BASE = (() => {
   if (location.hostname.endsWith('vercel.app')) return location.origin;
-  // preview / local: point to deployed Vercel API that hosts /api/ildn + /api/damini
   return 'https://radar-api-livid.vercel.app';
 })();
 const ildnGroup = L.layerGroup().addTo(map);
 const daminiGroup = L.layerGroup().addTo(map);
-let ildnCtrl=null, daminiCtrl=null;
+const rasterGroup = L.layerGroup().addTo(map);
+const tracksGroup = L.layerGroup().addTo(map);
+const alertsGroup = L.layerGroup().addTo(map);
+let ildnCtrl=null, daminiCtrl=null, exportCtrl=null;
 
 function initLightning(){
   // Prefer proxy; if proxy 404 (not yet deployed) fall back to direct (CORS will fail, but we keep warning)
@@ -530,26 +537,31 @@ function initLightning(){
     try{
       daminiCtrl = addDaminiLayer(map, { layerGroup: daminiGroup, interval: 15, refreshMs: 300000, ...(daminiUrl?{proxyUrl: daminiUrl}:{}) });
     }catch(e){ console.warn('Damini init', e); }
+    // export layers: raster PNG (IITM), tracks (144 cells), alerts L3 — all via /api/damini-* proxies
+    try{
+      exportCtrl = addDaminiExportLayers(map, { rasterGroup, tracksGroup, alertsGroup });
+      rasterGroup.addTo(map); tracksGroup.addTo(map); alertsGroup.addTo(map);
+      exportCtrl.start();
+    }catch(e){ console.warn('Damini export init', e); }
     updateLightningCount();
     setInterval(updateLightningCount, 15000);
-    // toggle wiring
-    document.getElementById('toggleILDN').addEventListener('change', e=>{
-      if(e.target.checked) map.addLayer(ildnGroup); else map.removeLayer(ildnGroup);
-      updateLightningCount();
-    });
-    document.getElementById('toggleDamini').addEventListener('change', e=>{
-      if(e.target.checked) map.addLayer(daminiGroup); else map.removeLayer(daminiGroup);
-      updateLightningCount();
-    });
+    document.getElementById('toggleILDN').addEventListener('change', e=>{ if(e.target.checked) map.addLayer(ildnGroup); else map.removeLayer(ildnGroup); updateLightningCount(); });
+    document.getElementById('toggleDamini').addEventListener('change', e=>{ if(e.target.checked) map.addLayer(daminiGroup); else map.removeLayer(daminiGroup); updateLightningCount(); });
+    document.getElementById('toggleRaster').addEventListener('change', e=>{ if(e.target.checked) map.addLayer(rasterGroup); else map.removeLayer(rasterGroup); });
+    document.getElementById('toggleTracks').addEventListener('change', e=>{ if(e.target.checked) map.addLayer(tracksGroup); else map.removeLayer(tracksGroup); });
+    document.getElementById('toggleAlerts').addEventListener('change', e=>{ if(e.target.checked) map.addLayer(alertsGroup); else map.removeLayer(alertsGroup); });
     L.control.layers(null, {
       "ILDN (90 min)": ildnGroup,
-      "Damini (15 min)": daminiGroup
+      "Damini pulses": daminiGroup,
+      "IITM raster": rasterGroup,
+      "Tracks (144 cells)": tracksGroup,
+      "Alerts L3": alertsGroup
     }, {collapsed:false}).addTo(map);
   });
 }
 function updateLightningCount(){
   const ildnN = ildnGroup.getLayers().length;
-  const daminiN = daminiGroup.getLayers().length;
+  const daminiN = daminiGroup.getLayers().length + tracksGroup.getLayers().length + alertsGroup.getLayers().length;
   const total = ildnN + daminiN;
   const el = document.getElementById('lightningCount');
   const badge = document.getElementById('liveBadge');
