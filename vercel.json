@@ -2,6 +2,10 @@
   "functions": {
     "api/**/*.js": {
       "maxDuration": 30
+    },
+    "api/damini-*.js": {
+      "regions": ["bom1"],
+      "maxDuration": 30
     }
   }
 }
