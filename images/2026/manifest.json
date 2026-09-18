@@ -3535,5 +3535,14 @@
     "thumb": "20260918_0340_thumb.png",
     "z": 3,
     "host": "https://tilecache.rainviewer.com"
+  },
+  {
+    "time": 1789703400,
+    "iso": "2026-09-18T03:50:00Z",
+    "path": "/v2/radar/b94e144c4499",
+    "file": "20260918_0350.png",
+    "thumb": "20260918_0350_thumb.png",
+    "z": 3,
+    "host": "https://tilecache.rainviewer.com"
   }
 ]
