@@ -1,0 +1,11 @@
+[
+  {
+    "time": 1790294400,
+    "iso": "2026-09-25T00:00:00Z",
+    "path": "/v2/radar/423b88f25a57",
+    "file": "20260925_0000.png",
+    "thumb": "20260925_0000_thumb.png",
+    "z": 3,
+    "host": "https://tilecache.rainviewer.com"
+  }
+]
