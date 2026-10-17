@@ -1060,5 +1060,14 @@
     "thumb": "20261017_1930_thumb.png",
     "z": 3,
     "host": "https://tilecache.rainviewer.com"
+  },
+  {
+    "time": 1792266000,
+    "iso": "2026-10-17T19:40:00Z",
+    "path": "/v2/radar/bd8351cff1e0",
+    "file": "20261017_1940.png",
+    "thumb": "20261017_1940_thumb.png",
+    "z": 3,
+    "host": "https://tilecache.rainviewer.com"
   }
 ]
