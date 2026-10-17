@@ -1042,5 +1042,14 @@
     "thumb": "20261017_1910_thumb.png",
     "z": 3,
     "host": "https://tilecache.rainviewer.com"
+  },
+  {
+    "time": 1792264800,
+    "iso": "2026-10-17T19:20:00Z",
+    "path": "/v2/radar/d32fa5718cad",
+    "file": "20261017_1920.png",
+    "thumb": "20261017_1920_thumb.png",
+    "z": 3,
+    "host": "https://tilecache.rainviewer.com"
   }
 ]
